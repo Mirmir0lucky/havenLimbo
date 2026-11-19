@@ -22,6 +22,7 @@ use crate::server::packet_registry::PacketRegistry;
 use crate::server_state::ServerState;
 use minecraft_packets::play::client_bound_raw_plugin_message_packet::PlayClientBoundRawPluginMessagePacket;
 use minecraft_packets::play::custom_click_action_packet::CustomClickActionPacket;
+use minecraft_packets::play::player_loaded_packet::PlayerLoadedPacket;
 use minecraft_packets::play::server_bound_plugin_message_packet::ServerBoundPluginMessagePacket;
 use minecraft_packets::play::show_dialog_packet::ShowDialogPacket;
 use minecraft_protocol::prelude::{Identifier, ProtocolVersion, State};
@@ -67,10 +68,18 @@ impl PacketHandler for ServerBoundPluginMessagePacket {
         }
 
         match dialog_from_json(body) {
-            Ok(dialog) => {
+            Ok(dialog) if client_state.is_player_loaded() => {
                 debug!("Showing a dialog to {}", client_state.get_username());
                 batch.queue(move || PacketRegistry::ShowDialog(ShowDialogPacket::inline(dialog)));
                 batch.queue(|| reply(ACTION_SHOWN, &[]));
+            }
+            Ok(dialog) => {
+                // The client closes any screen when its loading screen finishes, so wait for `player_loaded`.
+                debug!(
+                    "Holding a dialog for {} until the client has loaded",
+                    client_state.get_username()
+                );
+                client_state.set_pending_dialog(dialog);
             }
             Err(reason) => {
                 warn!(
@@ -79,6 +88,23 @@ impl PacketHandler for ServerBoundPluginMessagePacket {
                 );
                 batch.queue(|| reply(ACTION_UNSUPPORTED, &[]));
             }
+        }
+        Ok(batch)
+    }
+}
+
+impl PacketHandler for PlayerLoadedPacket {
+    fn handle(
+        &self,
+        client_state: &mut ClientState,
+        _server_state: &ServerState,
+    ) -> Result<Batch, PacketHandlerError> {
+        let mut batch = Batch::new();
+        client_state.set_player_loaded();
+        if let Some(dialog) = client_state.take_pending_dialog() {
+            debug!("Showing the held dialog to {}", client_state.get_username());
+            batch.queue(move || PacketRegistry::ShowDialog(ShowDialogPacket::inline(dialog)));
+            batch.queue(|| reply(ACTION_SHOWN, &[]));
         }
         Ok(batch)
     }
@@ -102,6 +128,15 @@ impl PacketHandler for CustomClickActionPacket {
         } else {
             None
         };
+        if fields.is_none() && !self.payload().is_empty() {
+            // Never log the bytes themselves: they can contain a password.
+            warn!(
+                "Could not read the input values of dialog action {id} from {} ({} payload bytes, first tag byte {})",
+                client_state.get_username(),
+                self.payload().len(),
+                self.payload()[0]
+            );
+        }
         match fields {
             // Never log `fields`: it can contain a password.
             Some(fields) => {

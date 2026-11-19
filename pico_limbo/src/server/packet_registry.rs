@@ -35,6 +35,7 @@ use minecraft_packets::play::legacy_chat_message_packet::LegacyChatMessagePacket
 use minecraft_packets::play::legacy_set_title_packet::LegacySetTitlePacket;
 use minecraft_packets::play::login_packet::LoginPacket;
 use minecraft_packets::play::player_info_update_packet::PlayerInfoUpdatePacket;
+use minecraft_packets::play::player_loaded_packet::PlayerLoadedPacket;
 use minecraft_packets::play::server_bound_player_abilities_packet::ServerBoundPlayerAbilitiesPacket;
 use minecraft_packets::play::server_bound_plugin_message_packet::ServerBoundPluginMessagePacket;
 use minecraft_packets::play::set_action_bar_text_packet::SetActionBarTextPacket;
@@ -390,6 +391,13 @@ pub enum PacketRegistry {
     )]
     CustomClickAction(CustomClickActionPacket),
 
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:player_loaded"
+    )]
+    PlayerLoaded(PlayerLoadedPacket),
+
     #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:show_dialog")]
     ShowDialog(ShowDialogPacket),
 
@@ -423,6 +431,7 @@ impl PacketHandler for PacketRegistry {
             Self::ServerBoundKnownPacks(packet) => packet.handle(client_state, server_state),
             Self::ServerBoundPluginMessage(packet) => packet.handle(client_state, server_state),
             Self::CustomClickAction(packet) => packet.handle(client_state, server_state),
+            Self::PlayerLoaded(packet) => packet.handle(client_state, server_state),
             _ => Err(PacketHandlerError::custom("Unhandled packet")),
         }
     }

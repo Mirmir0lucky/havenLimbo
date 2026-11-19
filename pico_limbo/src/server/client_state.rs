@@ -24,6 +24,8 @@ impl Default for ClientState {
             is_flight_allowed: false,
             is_flying: false,
             flying_speed: 0.05,
+            player_loaded: false,
+            pending_dialog: None,
         }
     }
 }
@@ -40,6 +42,8 @@ pub struct ClientState {
     is_flight_allowed: bool,
     is_flying: bool,
     flying_speed: f32,
+    player_loaded: bool,
+    pending_dialog: Option<pico_nbt::Value>,
 }
 
 impl ClientState {
@@ -163,6 +167,26 @@ impl ClientState {
 
     pub const fn set_feet_position(&mut self, feet_y: f64) {
         self.feet_y = feet_y;
+    }
+
+    // Loading and dialogs
+
+    /// The client reported `player_loaded`: it has left the loading screen.
+    pub const fn is_player_loaded(&self) -> bool {
+        self.player_loaded
+    }
+
+    pub const fn set_player_loaded(&mut self) {
+        self.player_loaded = true;
+    }
+
+    /// Keeps a dialog until the client has finished loading. A newer dialog replaces the older one.
+    pub fn set_pending_dialog(&mut self, dialog: pico_nbt::Value) {
+        self.pending_dialog = Some(dialog);
+    }
+
+    pub const fn take_pending_dialog(&mut self) -> Option<pico_nbt::Value> {
+        self.pending_dialog.take()
     }
 
     // Movement
