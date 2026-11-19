@@ -1,0 +1,78 @@
+name: Haven build and release
+
+# Every push builds PicoLimbo and publishes a GitHub release with the binaries.
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: haven-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: pico_limbo-linux-x86_64
+            bin: pico_limbo
+          - os: windows-latest
+            asset: pico_limbo-windows-x86_64.exe
+            bin: pico_limbo.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the version (1.99.0)
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release -p pico_limbo
+
+      - name: Build
+        run: cargo build --release -p pico_limbo
+
+      - name: Collect binary
+        shell: bash
+        run: |
+          mkdir dist
+          cp "target/release/${{ matrix.bin }}" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          SHORT="${GITHUB_SHA::7}"
+          gh release create "$TAG" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "Build ${{ github.run_number }} (${GITHUB_REF_NAME} @ ${SHORT})" \
+            --notes "Automatic build of \`${GITHUB_REF_NAME}\` at commit ${SHORT}." \
+            --prerelease
