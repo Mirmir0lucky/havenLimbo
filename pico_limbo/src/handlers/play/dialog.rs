@@ -13,6 +13,7 @@
 //! | limbo -> proxy   | 2 CLICK| id of the custom click action (UTF-8)  |
 //! | limbo -> proxy   | 3 SHOWN| empty, the dialog was sent to the client |
 //! | limbo -> proxy   | 4 UNSUPPORTED | empty, the client cannot show it |
+//! | limbo -> proxy   | 5 SUBMIT| `{"id": "...", "fields": {...}}` as UTF-8 JSON: the id of the pressed button and the values of the dialog inputs |
 
 use crate::server::batch::Batch;
 use crate::server::client_state::ClientState;
@@ -34,10 +35,13 @@ const ACTION_SHOW: u8 = 1;
 const ACTION_CLICK: u8 = 2;
 const ACTION_SHOWN: u8 = 3;
 const ACTION_UNSUPPORTED: u8 = 4;
+const ACTION_SUBMIT: u8 = 5;
 
 /// A dialog is a few kilobytes at most; refuse anything absurd.
 const MAX_DIALOG_BYTES: usize = 64 * 1024;
 const MAX_ACTION_ID_BYTES: usize = 256;
+/// Input values (a username or password) are short; refuse anything larger.
+const MAX_PAYLOAD_BYTES: usize = 8 * 1024;
 
 impl PacketHandler for ServerBoundPluginMessagePacket {
     fn handle(
@@ -92,7 +96,20 @@ impl PacketHandler for CustomClickActionPacket {
             return Ok(batch);
         }
         debug!("{} clicked dialog action {id}", client_state.get_username());
-        batch.queue(move || reply(ACTION_CLICK, id.as_bytes()));
+
+        let fields = if self.payload().len() <= MAX_PAYLOAD_BYTES {
+            payload_to_json(self.payload()).filter(|f| f.as_object().is_some_and(|o| !o.is_empty()))
+        } else {
+            None
+        };
+        match fields {
+            // Never log `fields`: it can contain a password.
+            Some(fields) => {
+                let body = serde_json::json!({ "id": id, "fields": fields }).to_string();
+                batch.queue(move || reply(ACTION_SUBMIT, body.as_bytes()));
+            }
+            None => batch.queue(move || reply(ACTION_CLICK, id.as_bytes())),
+        }
         Ok(batch)
     }
 }
@@ -124,6 +141,95 @@ fn dialog_from_json(body: &[u8]) -> Result<Value, String> {
         return Err("dialog must be a JSON object".to_string());
     }
     pico_nbt::json_to_nbt(json).map_err(|e| e.to_string())
+}
+
+/// Decodes the optional nameless NBT tag of a `custom_click_action` into JSON.
+///
+/// Accepts both an "end tag means nothing" encoding and a leading presence boolean, so it keeps
+/// working whichever the client uses. Returns `None` when there is no compound or it is malformed.
+fn payload_to_json(bytes: &[u8]) -> Option<serde_json::Value> {
+    let bytes = match bytes {
+        [1, 10, ..] => &bytes[1..],
+        _ => bytes,
+    };
+    let mut reader = NbtCursor { bytes, pos: 0 };
+    if reader.u8()? != 10 {
+        return None;
+    }
+    reader.compound(0)
+}
+
+struct NbtCursor<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl NbtCursor<'_> {
+    fn take(&mut self, n: usize) -> Option<&[u8]> {
+        let end = self.pos.checked_add(n)?;
+        let slice = self.bytes.get(self.pos..end)?;
+        self.pos = end;
+        Some(slice)
+    }
+
+    fn u8(&mut self) -> Option<u8> {
+        self.take(1).map(|b| b[0])
+    }
+
+    fn u16(&mut self) -> Option<u16> {
+        self.take(2).map(|b| u16::from_be_bytes([b[0], b[1]]))
+    }
+
+    fn i32(&mut self) -> Option<i32> {
+        self.take(4)
+            .map(|b| i32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn string(&mut self) -> Option<String> {
+        let len = usize::from(self.u16()?);
+        let raw = self.take(len)?;
+        Some(String::from_utf8_lossy(raw).into_owned())
+    }
+
+    fn compound(&mut self, depth: u32) -> Option<serde_json::Value> {
+        if depth > 8 {
+            return None;
+        }
+        let mut map = serde_json::Map::new();
+        loop {
+            let tag = self.u8()?;
+            if tag == 0 {
+                return Some(serde_json::Value::Object(map));
+            }
+            let name = self.string()?;
+            map.insert(name, self.value(tag, depth + 1)?);
+        }
+    }
+
+    fn value(&mut self, tag: u8, depth: u32) -> Option<serde_json::Value> {
+        use serde_json::Value as J;
+        Some(match tag {
+            1 => J::from(i64::from(self.u8()? as i8)),
+            2 => J::from(i64::from(self.u16()? as i16)),
+            3 => J::from(i64::from(self.i32()?)),
+            4 => {
+                let b = self.take(8)?;
+                J::from(i64::from_be_bytes(b.try_into().ok()?))
+            }
+            5 => {
+                let b = self.take(4)?;
+                J::from(f64::from(f32::from_be_bytes(b.try_into().ok()?)))
+            }
+            6 => {
+                let b = self.take(8)?;
+                J::from(f64::from_be_bytes(b.try_into().ok()?))
+            }
+            8 => J::from(self.string()?),
+            10 => self.compound(depth)?,
+            // Lists and arrays never appear in the controls we use.
+            _ => return None,
+        })
+    }
 }
 
 fn reply(action: u8, body: &[u8]) -> PacketRegistry {
@@ -169,6 +275,35 @@ mod tests {
             br#"{"type":"minecraft:multi_action","title":"Hi","can_close_with_escape":false}"#;
         let value = dialog_from_json(json).unwrap();
         assert!(matches!(value, Value::Compound(_)));
+    }
+
+    #[test]
+    fn payload_with_string_fields_becomes_json() {
+        // compound { password: "abc", confirm: "abc" }
+        let mut data = vec![10];
+        for (k, v) in [("password", "abc"), ("confirm", "abc")] {
+            data.push(8);
+            data.extend_from_slice(&(k.len() as u16).to_be_bytes());
+            data.extend_from_slice(k.as_bytes());
+            data.extend_from_slice(&(v.len() as u16).to_be_bytes());
+            data.extend_from_slice(v.as_bytes());
+        }
+        data.push(0);
+        let json = payload_to_json(&data).unwrap();
+        assert_eq!(json["password"], "abc");
+        assert_eq!(json["confirm"], "abc");
+
+        // the same payload behind a presence boolean
+        let mut with_flag = vec![1];
+        with_flag.extend_from_slice(&data);
+        assert_eq!(payload_to_json(&with_flag).unwrap(), json);
+    }
+
+    #[test]
+    fn empty_or_truncated_payload_is_none() {
+        assert!(payload_to_json(&[]).is_none());
+        assert!(payload_to_json(&[0]).is_none());
+        assert!(payload_to_json(&[10, 8, 0, 5, b'a']).is_none());
     }
 
     #[test]

@@ -11,8 +11,11 @@ Channel: `haventriton:dialog`. Both directions: `[version: u8 = 1][action: u8][b
 | limbo -> proxy | 2 CLICK       | id of the `minecraft:dynamic/custom` action |
 | limbo -> proxy | 3 SHOWN       | empty                                     |
 | limbo -> proxy | 4 UNSUPPORTED | empty (client older than 1.21.6 or bad JSON) |
+| limbo -> proxy | 5 SUBMIT      | `{"id":"...","fields":{...}}`: the button id plus the values of the dialog's input controls (UTF-8 JSON) |
 
 Buttons must use `{"type":"minecraft:dynamic/custom","id":"<id>"}`; the client answers with `custom_click_action`.
 Limits: dialog 64 KiB, action id 256 bytes.
 
 Build: `cargo build --release` (toolchain pinned to Rust 1.99.0 by `rust-toolchain.toml`).
+
+A button press without input values is reported as CLICK; with values it is reported as SUBMIT. Input values are never logged.
