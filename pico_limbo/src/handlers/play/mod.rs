@@ -1,4 +1,5 @@
 mod commands;
+mod dialog;
 pub mod fetch_minecraft_profile;
 mod player_abilities;
 pub mod send_chunks_circularly;

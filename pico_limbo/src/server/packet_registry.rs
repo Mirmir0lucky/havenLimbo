@@ -26,7 +26,9 @@ use minecraft_packets::play::chunk_data_and_update_light_packet::ChunkDataAndUpd
 use minecraft_packets::play::client_bound_keep_alive_packet::ClientBoundKeepAlivePacket;
 use minecraft_packets::play::client_bound_player_abilities_packet::ClientBoundPlayerAbilitiesPacket;
 use minecraft_packets::play::client_bound_plugin_message_packet::PlayClientBoundPluginMessagePacket;
+use minecraft_packets::play::client_bound_raw_plugin_message_packet::PlayClientBoundRawPluginMessagePacket;
 use minecraft_packets::play::commands_packet::CommandsPacket;
+use minecraft_packets::play::custom_click_action_packet::CustomClickActionPacket;
 use minecraft_packets::play::disconnect_packet::DisconnectPacket;
 use minecraft_packets::play::game_event_packet::GameEventPacket;
 use minecraft_packets::play::legacy_chat_message_packet::LegacyChatMessagePacket;
@@ -34,6 +36,7 @@ use minecraft_packets::play::legacy_set_title_packet::LegacySetTitlePacket;
 use minecraft_packets::play::login_packet::LoginPacket;
 use minecraft_packets::play::player_info_update_packet::PlayerInfoUpdatePacket;
 use minecraft_packets::play::server_bound_player_abilities_packet::ServerBoundPlayerAbilitiesPacket;
+use minecraft_packets::play::server_bound_plugin_message_packet::ServerBoundPluginMessagePacket;
 use minecraft_packets::play::set_action_bar_text_packet::SetActionBarTextPacket;
 use minecraft_packets::play::set_chunk_cache_center_packet::SetCenterChunkPacket;
 use minecraft_packets::play::set_default_spawn_position_packet::SetDefaultSpawnPositionPacket;
@@ -43,6 +46,7 @@ use minecraft_packets::play::set_player_position_packet::SetPlayerPositionPacket
 use minecraft_packets::play::set_subtitle_text_packet::SetSubtitleTextPacket;
 use minecraft_packets::play::set_title_text_packet::SetTitleTextPacket;
 use minecraft_packets::play::set_titles_animation::SetTitlesAnimationPacket;
+use minecraft_packets::play::show_dialog_packet::ShowDialogPacket;
 use minecraft_packets::play::synchronize_player_position_packet::SynchronizePlayerPositionPacket;
 use minecraft_packets::play::system_chat_message_packet::SystemChatMessagePacket;
 use minecraft_packets::play::tab_list_packet::TabListPacket;
@@ -370,6 +374,31 @@ pub enum PacketRegistry {
         name = "minecraft:player_abilities"
     )]
     ServerBoundPlayerAbilities(ServerBoundPlayerAbilitiesPacket),
+
+    // Dialog relay: a proxy asks for a dialog, the client answers with a custom click action
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:custom_payload"
+    )]
+    ServerBoundPluginMessage(ServerBoundPluginMessagePacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:custom_click_action"
+    )]
+    CustomClickAction(CustomClickActionPacket),
+
+    #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:show_dialog")]
+    ShowDialog(ShowDialogPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:custom_payload"
+    )]
+    PlayClientBoundRawPluginMessage(PlayClientBoundRawPluginMessagePacket),
 }
 
 impl PacketHandler for PacketRegistry {
@@ -392,6 +421,8 @@ impl PacketHandler for PacketRegistry {
             Self::ChatMessage(packet) => packet.handle(client_state, server_state),
             Self::ServerBoundPlayerAbilities(packet) => packet.handle(client_state, server_state),
             Self::ServerBoundKnownPacks(packet) => packet.handle(client_state, server_state),
+            Self::ServerBoundPluginMessage(packet) => packet.handle(client_state, server_state),
+            Self::CustomClickAction(packet) => packet.handle(client_state, server_state),
             _ => Err(PacketHandlerError::custom("Unhandled packet")),
         }
     }
