@@ -1,6 +1,6 @@
 <div align="center">
 
-# PicoLimbo
+# havenLimbo
 
 **An ultra-lightweight, multi-version Minecraft limbo server written in Rust**
 
@@ -128,3 +128,4 @@ pull request on GitHub. Make sure to follow the existing code style and include 
 3. Make changes and commit `git commit -m 'Add some feature'`.
 4. Push to your fork `git push origin <branch-name>`.
 5. Submit a pull request.
+
