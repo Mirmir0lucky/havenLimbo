@@ -17,6 +17,16 @@ pub enum RawPacketError {
     EncodePacket { id: u8, version: i32 },
 }
 
+/// Packet ids are VarInts on the wire. Ids of 128 and above (e.g. `show_dialog`) take two bytes;
+/// writing them as a single byte makes the client read the first body byte as part of the id.
+fn packet_id_varint(packet_id: u8) -> Vec<u8> {
+    if packet_id < 0x80 {
+        vec![packet_id]
+    } else {
+        vec![(packet_id & 0x7F) | 0x80, packet_id >> 7]
+    }
+}
+
 impl RawPacket {
     /// Creates a raw packet, containing its ID and associated data.
     /// The data vector must not be length padded.
@@ -29,8 +39,8 @@ impl RawPacket {
     }
 
     pub fn from_bytes(packet_id: u8, bytes: &[u8]) -> Self {
-        let mut data = vec![packet_id];
-        data.append(&mut bytes.to_vec());
+        let mut data = packet_id_varint(packet_id);
+        data.extend_from_slice(bytes);
         Self { data }
     }
 
@@ -44,7 +54,9 @@ impl RawPacket {
         T: EncodePacket + Identifiable,
     {
         let mut writer = BinaryWriter::new();
-        writer.write(&packet_id)?;
+        for byte in packet_id_varint(packet_id) {
+            writer.write(&byte)?;
+        }
         packet.encode(&mut writer, ProtocolVersion::from(version_number))?;
 
         let data = writer.into_inner();
@@ -78,5 +90,23 @@ impl Display for RawPacket {
             write!(f, "{byte:02X} ")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod packet_id_tests {
+    use super::*;
+
+    #[test]
+    fn small_ids_are_one_byte() {
+        assert_eq!(packet_id_varint(12), vec![12]);
+        assert_eq!(packet_id_varint(127), vec![127]);
+    }
+
+    #[test]
+    fn large_ids_are_two_byte_varints() {
+        assert_eq!(packet_id_varint(140), vec![0x8C, 0x01]);
+        assert_eq!(packet_id_varint(143), vec![0x8F, 0x01]);
+        assert_eq!(packet_id_varint(255), vec![0xFF, 0x01]);
     }
 }
