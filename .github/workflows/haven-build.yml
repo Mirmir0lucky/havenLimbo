@@ -22,6 +22,11 @@ jobs:
           - os: ubuntu-latest
             asset: pico_limbo-linux-x86_64
             bin: pico_limbo
+          # Statik (musl) Linux build: glibc sürümüne bağlı değildir, Docker ve eski dağıtımlarda çalışır
+          - os: ubuntu-latest
+            asset: pico_limbo-linux-x86_64-musl
+            bin: pico_limbo
+            target: x86_64-unknown-linux-musl
           - os: windows-latest
             asset: pico_limbo-windows-x86_64.exe
             bin: pico_limbo.exe
@@ -36,19 +41,36 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           rustc --version
 
+      - name: Install the musl target
+        if: matrix.target != ''
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          rustup target add ${{ matrix.target }}
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Test
         run: cargo test --release -p pico_limbo
 
       - name: Build
-        run: cargo build --release -p pico_limbo
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --release -p pico_limbo --target ${{ matrix.target }}
+          else
+            cargo build --release -p pico_limbo
+          fi
 
       - name: Collect binary
         shell: bash
         run: |
           mkdir dist
-          cp "target/release/${{ matrix.bin }}" "dist/${{ matrix.asset }}"
+          if [ -n "${{ matrix.target }}" ]; then
+            cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.asset }}"
+          else
+            cp "target/release/${{ matrix.bin }}" "dist/${{ matrix.asset }}"
+          fi
+          chmod +x "dist/${{ matrix.asset }}" || true
 
       - uses: actions/upload-artifact@v4
         with:
